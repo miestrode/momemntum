@@ -1,7 +1,9 @@
 {% import "common.wgsl.tera" as macros %}
 
+var<workgroup> accumulators: array<f32, {{ workgroup_size_y }}>;
+
 @group(0) @binding(0)
-var<storage, read_write> input: array<f32>;
+var<storage, read_write> input_0: array<f32>;
 
 @group(0) @binding(1)
 var<storage, read_write> output: array<f32>;
@@ -27,8 +29,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_
             remaining_index %= {{ stride }}u;
         {% endfor %}
 
-        var accumulator = {% if op == "max"%} log(0.0) {% else %} 0.0 {% endif %};
-
         {% for dim in reduce_dims %}
             for(
                 var index_{{ dim }} = 0u;
@@ -52,18 +52,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_
                     old_index="index",
                     old_strides="1_strides",
                     new_strides=id ~ "_strides",
-                    new_index="var_index_" ~ id
+                    new_index="elem_index_" ~ id
                 )
             }}
 
-            let var_{{ id }} = input_{{ id }}[var_index_{{ id }}];
+            let elem_{{ id }} = input_{{ id }}[var_index_{{ id }}];
         {% endfor %}
 
-        accumulator =
+        let elem_0 = input_0[index];
+
+        accumulators[batch_index] =
             {% if op == "sum" %}
-                accumulator + {{ pre_expr }}
+                accumulator[batch_index] + {{ pre_expr }}
             {% elif op == "max" %}
-                max(accumulator, {{ pre_expr }})
+                max(accumulator[batch_index], {{ pre_expr }})
             {% endif %};
 
         {% for dim in reduce_dims %}

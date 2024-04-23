@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use tera::{Context, Tera};
 
 use crate::{
-    graph::{BinaryElemwiseOp, ReduceOp, UnaryElemwiseOp},
+    graph::{ElemwiseOp, ReduceOp},
     tensor::{DimId, Layout},
 };
 
@@ -26,11 +26,7 @@ fn tera() -> &'static Tera {
     })
 }
 
-pub(crate) fn unary_elemwise(
-    workgroup_size_x: u32,
-    op: UnaryElemwiseOp,
-    elements: usize,
-) -> String {
+pub(crate) fn unary_elemwise(workgroup_size_x: u32, op: ElemwiseOp, elements: usize) -> String {
     let mut context = Context::new();
 
     context.insert("workgroup_size_x", &workgroup_size_x);

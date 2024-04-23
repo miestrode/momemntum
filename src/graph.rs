@@ -17,29 +17,18 @@ impl Debug for ExprId {
 }
 
 #[derive(Copy, Clone)]
-pub enum BinaryElemwiseOp {
+pub enum ElemwiseOp {
     Add,
     Mul,
-}
-
-impl Display for BinaryElemwiseOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            BinaryElemwiseOp::Add => "add",
-            BinaryElemwiseOp::Mul => "mul",
-        })
-    }
-}
-
-#[derive(Copy, Clone)]
-pub enum UnaryElemwiseOp {
     Sin,
 }
 
-impl Display for UnaryElemwiseOp {
+impl Display for ElemwiseOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            UnaryElemwiseOp::Sin => "sin",
+            ElemwiseOp::Add => "add",
+            ElemwiseOp::Mul => "mul",
+            ElemwiseOp::Sin => "sin",
         })
     }
 }
@@ -84,8 +73,7 @@ impl Display for MovementOp {
 
 #[derive(Clone)]
 pub enum Op {
-    BinaryElemwise(BinaryElemwiseOp),
-    UnaryElemwise(UnaryElemwiseOp),
+    Elemwise(ElemwiseOp),
     Reduce { op: ReduceOp, dims: Vec<DimId> },
     Movement(MovementOp),
 }
@@ -93,7 +81,7 @@ pub enum Op {
 impl Op {
     pub(crate) fn infer_layout(&self, children: &[&Layout]) -> Layout {
         match self {
-            Op::UnaryElemwise(_) | Op::BinaryElemwise(_) => children[0].clone(),
+            Op::Elemwise(_) => children[0].clone(),
             Op::Reduce {
                 dims: reduce_dims, ..
             } => {
@@ -157,8 +145,7 @@ impl Op {
 impl Debug for Op {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&match self {
-            Op::BinaryElemwise(op) => op.to_string(),
-            Op::UnaryElemwise(op) => op.to_string(),
+            Op::Elemwise(op) => op.to_string(),
             Op::Reduce { op, .. } => op.to_string(),
             Op::Movement(op) => op.to_string(),
         })?;
@@ -296,102 +283,6 @@ impl Graph {
         self.outputs.push(expr);
     }
 }
-
-// impl Graph {
-//     fn visit_children(
-//         &mut self,
-//         gradient_map: &mut HashMap<ExprRef, ExprRef>,
-//         expression: ExprRef,
-//     ) {
-//         match &self[expression.id].expression {
-//             ExprBody::UnaryOperation { input, .. } => {
-//                 self.visit(gradient_map, *input);
-//             }
-//             &ExprBody::BinaryOperation {
-//                 left_input,
-//                 right_input,
-//                 ..
-//             } => {
-//                 let (first_input, second_input) = if left_input.id < right_input.id {
-//                     (right_input, left_input)
-//                 } else {
-//                     (left_input, right_input)
-//                 };
-//
-//                 self.visit(gradient_map, first_input);
-//                 self.visit(gradient_map, second_input);
-//             }
-//             ExprBody::VarTensor { .. } => {}
-//             ExprBody::ConstTensor { .. } => {}
-//         }
-//     }
-//
-//     fn visit(&mut self, gradient_map: &mut HashMap<ExprRef, ExprRef>, expression: ExprRef) {
-//         if gradient_map.contains_key(&expression) {
-//             return;
-//         }
-//
-//         gradient_map.insert(
-//             expression,
-//             self[expression.id()]
-//                 .usages
-//                 .clone()
-//                 .into_iter()
-//                 .map(|(usage, count)| vec![usage; count])
-//                 .flatten()
-//                 .filter(|usage| gradient_map.contains_key(usage))
-//                 .map(|usage| {
-//                     let gradient = gradient_map[&usage];
-//                     let partial_derivative =
-//                         match self[usage.id()].expression {
-//                             ExprBody::UnaryOperation { operation, .. } => match operation {
-//                                 UnaryOperation::Sin => expression.untracked().cos(),
-//                                 UnaryOperation::Cos => -expression.untracked().sin(),
-//                                 UnaryOperation::Negation => self
-//                                     .add_constant(Tensor::from_element(-1.0, expression.layout())),
-//                             },
-//                             ExprBody::BinaryOperation {
-//                                 left_input,
-//                                 right_input,
-//                                 operation,
-//                             } => match operation {
-//                                 BinaryOperation::Addition => self
-//                                     .add_constant(Tensor::from_element(1.0, expression.layout())),
-//                                 BinaryOperation::Multiplication => {
-//                                     if left_input == expression {
-//                                         right_input
-//                                     } else {
-//                                         left_input
-//                                     }
-//                                 }
-//                             },
-//                             ExprBody::VarTensor { .. } => unreachable!(),
-//                             ExprBody::ConstTensor { .. } => unreachable!(),
-//                         };
-//
-//                     gradient.untracked() * partial_derivative.untracked()
-//                 })
-//                 .reduce(|accumulator, expression| accumulator.untracked() + expression.untracked())
-//                 .unwrap(),
-//         );
-//
-//         self.visit_children(gradient_map, expression);
-//     }
-//
-//     pub fn gradients(&mut self, expression: ExprRef) -> HashMap<ExprRef, ExprRef> {
-//         let mut gradient_map = HashMap::with_capacity(expression.id().0 + 1);
-//
-//         let layout = expression.layout();
-//         gradient_map.insert(
-//             expression,
-//             self.add_constant(Tensor::from_element(1.0, layout)),
-//         );
-//
-//         self.visit_children(&mut gradient_map, expression);
-//
-//         gradient_map
-//     }
-// }
 
 impl Debug for Graph {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

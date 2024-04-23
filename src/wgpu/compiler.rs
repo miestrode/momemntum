@@ -70,7 +70,7 @@ impl Compiler for WgpuCompiler {
                                 &layouts[aliases[children[0].0].0],
                                 &layouts[aliases[children[1].0].0],
                             ),
-                            Op::UnaryElemwise(op) => kernel::unary_elemwise(
+                            Op::Elemwise(op) => kernel::unary_elemwise(
                                 self.workgroup_size_x,
                                 op,
                                 expr.layout.elements(),

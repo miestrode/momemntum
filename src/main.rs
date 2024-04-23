@@ -1,6 +1,6 @@
 use momentum::{
     compiler::{Compiler, Runner},
-    graph::{BinaryElemwiseOp, Graph, Op},
+    graph::{ElemwiseOp, Graph, Op},
     tensor::{Layout, Tensor},
     wgpu::{compiler::WgpuCompiler, runner::WgpuRunner},
 };
@@ -12,8 +12,8 @@ fn main() {
     let b = graph.add_input(Layout::from([1]));
     let c = graph.add_input(Layout::from([1]));
 
-    let result = graph.add_op(Op::BinaryElemwise(BinaryElemwiseOp::Mul), &[a, b]);
-    let result = graph.add_op(Op::BinaryElemwise(BinaryElemwiseOp::Add), &[result, c]);
+    let result = graph.add_op(Op::Elemwise(ElemwiseOp::Mul), &[a, b]);
+    let result = graph.add_op(Op::Elemwise(ElemwiseOp::Add), &[result, c]);
 
     graph.add_output(result);
 
