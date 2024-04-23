@@ -1,109 +1,13 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
-use std::ops::{Index, IndexMut, Mul};
+use std::ops::{Index, IndexMut};
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Shape {
-    dimensions: Box<[usize]>,
-}
+use serde::{Deserialize, Serialize};
 
-impl Debug for Shape {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(
-            &self
-                .dimensions()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("x"),
-        )
-    }
-}
+use crate::tensor::{DimId, Layout, Shape, Tensor};
 
-impl Shape {
-    pub fn elements(&self) -> usize {
-        self.dimensions().iter().copied().reduce(Mul::mul).unwrap()
-    }
-
-    pub fn dimensions(&self) -> &[usize] {
-        &self.dimensions
-    }
-
-    pub fn rank(&self) -> usize {
-        self.dimensions.len()
-    }
-}
-
-impl<const N: usize> From<[usize; N]> for Shape {
-    fn from(value: [usize; N]) -> Self {
-        Shape {
-            dimensions: value.into(),
-        }
-    }
-}
-
-impl From<&[usize]> for Shape {
-    fn from(value: &[usize]) -> Self {
-        Shape {
-            dimensions: value.into(),
-        }
-    }
-}
-
-impl From<Vec<usize>> for Shape {
-    fn from(value: Vec<usize>) -> Self {
-        Shape {
-            dimensions: value.into_boxed_slice(),
-        }
-    }
-}
-
-impl From<Box<[usize]>> for Shape {
-    fn from(value: Box<[usize]>) -> Self {
-        Shape { dimensions: value }
-    }
-}
-
-impl From<Shape> for Vec<usize> {
-    fn from(value: Shape) -> Self {
-        value.dimensions.to_vec()
-    }
-}
-
-impl From<Shape> for Box<[usize]> {
-    fn from(value: Shape) -> Self {
-        value.dimensions
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct Layout {
-    shape: Shape,
-}
-
-impl Debug for Layout {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}f32", self.shape())
-    }
-}
-
-impl<T: Into<Shape>> From<T> for Layout {
-    fn from(value: T) -> Self {
-        Self {
-            shape: value.into(),
-        }
-    }
-}
-
-impl Layout {
-    pub fn shape(&self) -> &Shape {
-        &self.shape
-    }
-}
-
-#[derive(Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ExprId(pub(crate) usize);
 
 impl Debug for ExprId {
@@ -112,73 +16,183 @@ impl Debug for ExprId {
     }
 }
 
-impl From<ExprId> for usize {
-    fn from(value: ExprId) -> Self {
-        value.0
+#[derive(Copy, Clone)]
+pub enum BinaryElemwiseOp {
+    Add,
+    Mul,
+}
+
+impl Display for BinaryElemwiseOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            BinaryElemwiseOp::Add => "add",
+            BinaryElemwiseOp::Mul => "mul",
+        })
     }
 }
 
-impl From<usize> for ExprId {
-    fn from(value: usize) -> Self {
-        ExprId(value)
+#[derive(Copy, Clone)]
+pub enum UnaryElemwiseOp {
+    Sin,
+}
+
+impl Display for UnaryElemwiseOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            UnaryElemwiseOp::Sin => "sin",
+        })
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Tensor {
-    pub(crate) data: Box<[f32]>,
-    pub(crate) layout: Layout,
+#[derive(Copy, Clone)]
+pub enum ReduceOp {
+    Sum,
+    Max,
 }
 
-impl Tensor {
-    pub fn from_parts(data: Box<[f32]>, layout: Layout) -> Self {
-        Self { data, layout }
+impl Display for ReduceOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ReduceOp::Sum => "sum",
+            ReduceOp::Max => "max",
+        })
     }
+}
 
-    pub fn from_element(element: f32, layout: Layout) -> Self {
-        Self {
-            data: vec![element; layout.shape().elements()].into_boxed_slice(),
-            layout,
-        }
+impl Debug for ReduceOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+#[derive(Clone)]
+pub enum MovementOp {
+    Reshape(Shape),
+    Transpose,
+    Squeeze,
+}
+
+impl Display for MovementOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            MovementOp::Reshape(_) => "reshape",
+            MovementOp::Transpose => "transpose",
+            MovementOp::Squeeze => "squeeze",
+        })
     }
 }
 
 #[derive(Clone)]
 pub enum Op {
-    Add,
-    Mul,
+    BinaryElemwise(BinaryElemwiseOp),
+    UnaryElemwise(UnaryElemwiseOp),
+    Reduce { op: ReduceOp, dims: Vec<DimId> },
+    Movement(MovementOp),
 }
 
 impl Op {
-    fn infer_layout(&self, children: &[&Layout]) -> Layout {
+    pub(crate) fn infer_layout(&self, children: &[&Layout]) -> Layout {
         match self {
-            Op::Add => children[0].clone(),
-            Op::Mul => children[0].clone(),
+            Op::UnaryElemwise(_) | Op::BinaryElemwise(_) => children[0].clone(),
+            Op::Reduce {
+                dims: reduce_dims, ..
+            } => {
+                let mut dims = children[0].dims().to_vec();
+
+                for dim in reduce_dims {
+                    dims[*dim] = 1;
+                }
+
+                Layout::from(dims)
+            }
+            Op::Movement(op) => match op {
+                MovementOp::Reshape(shape) => children[0].reshape(shape.clone()),
+                MovementOp::Transpose => {
+                    let rank = children[0].shape().rank();
+
+                    let mut dims = children[0].dims().to_vec();
+                    dims.swap(rank - 2, rank - 1);
+
+                    let mut strides = children[0].strides().to_vec();
+                    strides.swap(rank - 2, rank - 1);
+
+                    Layout {
+                        shape: Shape {
+                            dims: dims.into_boxed_slice(),
+                            strides: strides.into_boxed_slice(),
+                        },
+                    }
+                }
+                MovementOp::Squeeze => {
+                    let (dims, strides): (Vec<_>, Vec<_>) = children[0]
+                        .dims()
+                        .iter()
+                        .copied()
+                        .zip(children[0].strides().iter().copied())
+                        .filter(|&(dim, _)| dim != 1)
+                        .unzip();
+
+                    Layout {
+                        shape: Shape {
+                            dims: dims.into_boxed_slice(),
+                            strides: strides.into_boxed_slice(),
+                        },
+                    }
+                }
+            },
         }
     }
 }
 
-impl Display for Op {
+impl Op {
+    fn parameters(&self) -> Vec<(&'static str, Box<dyn Debug + '_>)> {
+        match self {
+            Op::Reduce { dims, .. } => vec![("dims", Box::new(dims))],
+            Op::Movement(MovementOp::Reshape(shape)) => vec![("shape", Box::new(shape))],
+            _ => vec![],
+        }
+    }
+}
+
+impl Debug for Op {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Op::Add => "add",
-            Op::Mul => "mul",
-        })
+        f.write_str(&match self {
+            Op::BinaryElemwise(op) => op.to_string(),
+            Op::UnaryElemwise(op) => op.to_string(),
+            Op::Reduce { op, .. } => op.to_string(),
+            Op::Movement(op) => op.to_string(),
+        })?;
+
+        let parameters = self.parameters();
+
+        if !parameters.is_empty() {
+            write!(
+                f,
+                "({})",
+                self.parameters()
+                    .into_iter()
+                    .map(|(parameter, value)| format!("{parameter}={value:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
+
+        Ok(())
     }
 }
 
 #[derive(Clone)]
 pub(crate) enum ExprBody {
     Op { op: Op, children: Vec<ExprId> },
-    VarTensor { layout: Layout, input: bool },
-    ConstTensor(Tensor),
+    Input(Layout),
+    Const(Tensor),
 }
 
 impl Debug for ExprBody {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             ExprBody::Op { op, children } => {
-                let mut result = f.debug_tuple(&op.to_string());
+                let mut result = f.debug_tuple(&format!("{op:?}"));
 
                 for child in children {
                     result.field(child);
@@ -186,23 +200,23 @@ impl Debug for ExprBody {
 
                 result.finish()
             }
-            ExprBody::VarTensor { .. } => f.write_str("?"),
-            ExprBody::ConstTensor(tensor) => Debug::fmt(&tensor.data, f),
+            ExprBody::Input(_) => f.write_str("?"),
+            ExprBody::Const(_) => f.write_str(".."),
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprInfo {
-    pub(crate) expression: ExprBody,
-    pub(crate) usages: HashMap<ExprId, usize>,
+    pub(crate) body: ExprBody,
     pub(crate) layout: Layout,
+    pub(crate) last_usage: ExprId,
 }
 
 #[derive(Default)]
 pub struct Graph {
     pub(crate) inputs: Vec<ExprId>,
-    pub(crate) expressions: Vec<ExprInfo>,
+    pub(crate) exprs: Vec<ExprInfo>,
     pub(crate) outputs: Vec<ExprId>,
 }
 
@@ -210,13 +224,13 @@ impl Index<ExprId> for Graph {
     type Output = ExprInfo;
 
     fn index(&self, index: ExprId) -> &Self::Output {
-        &self.expressions[index.0]
+        &self.exprs[index.0]
     }
 }
 
 impl IndexMut<ExprId> for Graph {
     fn index_mut(&mut self, index: ExprId) -> &mut Self::Output {
-        &mut self.expressions[index.0]
+        &mut self.exprs[index.0]
     }
 }
 
@@ -225,72 +239,50 @@ impl Graph {
         Self::default()
     }
 
-    fn add_usage(&mut self, expr: ExprId, user: ExprId) {
-        self[expr]
-            .usages
-            .entry(user)
-            .and_modify(|instances| *instances += 1)
-            .or_insert(1);
-    }
-
-    fn add_expr_untracked(&mut self, expression: ExprBody) {
-        let layout = match &expression {
-            ExprBody::Op { op, children } => op.infer_layout(
-                &children
-                    .iter()
-                    .copied()
-                    .map(|expr| &self[expr].layout)
-                    .collect::<Vec<_>>(),
-            ),
-            ExprBody::VarTensor { layout, .. } => layout.clone(),
-            ExprBody::ConstTensor(tensor) => tensor.layout.clone(),
-        };
-
-        self.expressions.push(ExprInfo {
-            expression,
-            layout,
-            usages: HashMap::new(),
-        });
+    pub(crate) fn last_usages(&self) -> Vec<ExprId> {
+        self.exprs.iter().map(|expr| expr.last_usage).collect()
     }
 
     fn add_expr(&mut self, expr: ExprBody) -> ExprId {
-        let id = ExprId::from(self.expressions.len());
+        let id = ExprId(self.exprs.len());
 
-        match &expr {
-            ExprBody::Op { children, .. } => {
-                for child in children.iter().copied() {
-                    self.add_usage(child, id);
+        let layout = match &expr {
+            ExprBody::Op { op, children } => {
+                for expr in children.iter().copied() {
+                    self[expr].last_usage = id;
                 }
-            }
-            ExprBody::VarTensor { input, .. } => {
-                if *input {
-                    self.inputs.push(id);
-                }
-            }
-            ExprBody::ConstTensor(..) => {}
-        }
 
-        self.add_expr_untracked(expr);
+                op.infer_layout(
+                    &children
+                        .iter()
+                        .copied()
+                        .map(|expr| &self[expr].layout)
+                        .collect::<Vec<_>>(),
+                )
+            }
+            ExprBody::Input(layout) => layout.clone(),
+            ExprBody::Const(tensor) => tensor.layout.clone(),
+        };
+
+        self.exprs.push(ExprInfo {
+            body: expr,
+            layout,
+            last_usage: id,
+        });
 
         id
     }
 
     pub fn add_input(&mut self, layout: Layout) -> ExprId {
-        self.add_expr(ExprBody::VarTensor {
-            layout,
-            input: true,
-        })
+        let id = self.add_expr(ExprBody::Input(layout));
+
+        self.inputs.push(id);
+
+        id
     }
 
-    pub fn add_variable(&mut self, layout: Layout) -> ExprId {
-        self.add_expr(ExprBody::VarTensor {
-            layout,
-            input: false,
-        })
-    }
-
-    pub fn add_constant(&mut self, tensor: Tensor) -> ExprId {
-        self.add_expr(ExprBody::ConstTensor(tensor))
+    pub fn add_const(&mut self, tensor: Tensor) -> ExprId {
+        self.add_expr(ExprBody::Const(tensor))
     }
 
     pub fn add_op(&mut self, op: Op, children: &[ExprId]) -> ExprId {
@@ -408,7 +400,7 @@ impl Debug for Graph {
             "({}) -> ({}) {{",
             self.inputs
                 .iter()
-                .map(|input| format!("{input:?}: {:?}", self[*input].layout))
+                .map(|input| format!("{input:?}: {}", self[*input].layout))
                 .collect::<Vec<_>>()
                 .join(", "),
             self.outputs
@@ -426,18 +418,16 @@ impl Debug for Graph {
 
         f.write_str(
             &self
-                .expressions
+                .exprs
                 .iter()
-                .zip((0..self.expressions.len()).map(ExprId))
-                .filter(|(info, _)| {
-                    !matches!(info.expression, ExprBody::VarTensor { input: true, .. })
-                })
+                .zip((0..self.exprs.len()).map(ExprId))
+                .filter(|(info, _)| !matches!(info.body, ExprBody::Input(..)))
                 .map(|(node, id)| {
                     format!(
-                        "{}{id:?}: {:?} = {:?};",
+                        "{}{id:?}: {} = {:?};",
                         if f.alternate() { "    " } else { "" },
                         node.layout,
-                        node.expression
+                        node.body
                     )
                 })
                 .collect::<Vec<_>>()

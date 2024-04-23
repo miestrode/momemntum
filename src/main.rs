@@ -1,16 +1,34 @@
 use momentum::{
-    compiler::{Compiler, Runnable},
-    graph::{Graph, Layout, Op},
-    wgpu::compiler::Wgpu,
+    compiler::{Compiler, Runner},
+    graph::{BinaryElemwiseOp, Graph, Op},
+    tensor::{Layout, Tensor},
+    wgpu::{compiler::WgpuCompiler, runner::WgpuRunner},
 };
 
 fn main() {
     let mut graph = Graph::new();
 
-    let input = graph.add_input(Layout::from([1]));
-    let result = graph.add_op(Op::Mul, &[input, input]);
+    let a = graph.add_input(Layout::from([1]));
+    let b = graph.add_input(Layout::from([1]));
+    let c = graph.add_input(Layout::from([1]));
+
+    let result = graph.add_op(Op::BinaryElemwise(BinaryElemwiseOp::Mul), &[a, b]);
+    let result = graph.add_op(Op::BinaryElemwise(BinaryElemwiseOp::Add), &[result, c]);
 
     graph.add_output(result);
 
-    println!("{:?}", Wgpu.compile(graph).run(vec![]));
+    println!("{graph:#?}");
+
+    let compiler = WgpuCompiler::default();
+    let mut runner = WgpuRunner::new();
+
+    let runnable = runner.preprocess(compiler.compile(graph));
+
+    println!(
+        "{:#?}",
+        runner.run(
+            runnable,
+            vec![Tensor::from_parts(Box::new([2.0]), Layout::from([1]))]
+        )
+    );
 }

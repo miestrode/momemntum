@@ -1,0 +1,22 @@
+{% macro get_index(old_index, old_strides, new_strides, new_index) %}
+    let {{ new_index }};
+
+    {
+        var remaining_index = {{ old_index }};
+        
+        {% for stride in old_strides %}
+            let index_{{ loop.index0 }} = remaining_index / {{ stride }}u;
+
+            remaining_index %= {{ stride }}u;
+        {% endfor %}
+
+        {{ new_index }} = 
+            {% for stride in new_strides %}
+                index_{{ loop.index0 }} * {{ stride }}u
+                
+                {% if not loop.last %}
+                    +
+                {% endif %}
+            {% endfor %};
+    }
+{% endmacro get_index %}

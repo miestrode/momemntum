@@ -5,4 +5,8 @@ authors = ["Yoav Grimland"]
 edition = "2021"
 
 [dependencies]
-wgpu = "0.19.3"
+bytemuck = "1.15.0"
+wgpu = "0.19.4"
+pollster = "0.3.0"
+tera = "1.19.1"
+serde = { version = "1.0.198", features = ["derive"] }

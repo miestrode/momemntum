@@ -1,0 +1,88 @@
+{% import "common.wgsl.tera" as macros %}
+
+@group(0) @binding(0)
+var<storage, read_write> input: array<f32>;
+
+@group(0) @binding(1)
+var<storage, read_write> output: array<f32>;
+
+{% for id in pre_ids | concat(with=post_ids) %}
+    @group(0) @binding({{ id }})
+    var<storage> input_{{ id }}: array<f32>;
+{% endfor %}
+
+@compute @workgroup_size({{ workgroup_size_x }}, {{ workgroup_size_y }})
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_id) local_id: vec3<u32>) {
+    let output_index = global_id.x;
+    let batch_index = local_id.y;
+
+    if output_index < {{ 1_elements }} {
+        var remaining_index = output_index;
+        
+        {% for stride in 1_strides %}
+            {% if not loop.index0 in reduce_dims %}
+                let index_{{ loop.index0 }} = remaining_index / {{ stride }}u;
+            {% endif %}
+
+            remaining_index %= {{ stride }}u;
+        {% endfor %}
+
+        var accumulator = {% if op == "max"%} log(0.0) {% else %} 0.0 {% endif %};
+
+        {% for dim in reduce_dims %}
+            for(
+                var index_{{ dim }} = 0u;
+                index_{{ dim }} < {{ input_dims[dim] }};
+                {% if loop.last %}
+                    {{ workgroup_size_y }}
+                {% else %}
+                    index_{{ dim }}++
+                {% endif %}
+            ) {
+        {% endfor %}
+
+        let index =
+            {% for stride in 0_strides %}
+                index_{{ loop.index0 }} * {{ stride }}u + {% if loop.last %} batch_index {% endif %}
+            {% endfor %};
+
+        {% for id in pre_ids %}
+            {{
+                macros::get_index(
+                    old_index="index",
+                    old_strides="1_strides",
+                    new_strides=id ~ "_strides",
+                    new_index="var_index_" ~ id
+                )
+            }}
+
+            let var_{{ id }} = input_{{ id }}[var_index_{{ id }}];
+        {% endfor %}
+
+        accumulator =
+            {% if op == "sum" %}
+                accumulator + {{ pre_expr }}
+            {% elif op == "max" %}
+                max(accumulator, {{ pre_expr }})
+            {% endif %};
+
+        {% for dim in reduce_dims %}
+            }
+        {% endfor %}
+
+        {% for id in post_ids %}
+            {{
+                macros::get_index(
+                    old_index="output_index",
+                    old_strides="1_strides",
+                    new_strides=id ~ "_strides",
+                    new_index="var_index_" ~ id
+                )
+            }}
+
+            let var_{{ id }} = input_{{ id }}[var_index_{{ id }}];
+        {% endfor %}
+
+        output[output_index] = {{ post_expr }};
+    }
+}
