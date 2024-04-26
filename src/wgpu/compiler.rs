@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     compiler::Compiler,
-    graph::{ExprBody, ExprId, Graph, Op},
+    graph::{ElemwiseOp, ExprBody, ExprId, Graph, Op},
     tensor::{Layout, Tensor},
 };
 
-use super::kernel;
+use super::{
+    expr::{WgpuExpr, WgpuOp},
+    kernel,
+};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) enum WgpuStep {
@@ -22,7 +25,7 @@ pub(crate) enum WgpuStep {
         size: u64,
         source: String,
         workgroups: [u32; 3],
-        inputs: Box<[ExprId]>,
+        inputs: Box<[(ExprId, bool)]>,
     },
 }
 
@@ -64,24 +67,23 @@ impl Compiler for WgpuCompiler {
                         output: id,
                         size: expr.layout.size() as u64,
                         source: match op {
-                            Op::BinaryElemwise(op) => kernel::binary_elemwise(
+                            Op::Elemwise(op) => kernel::elemwise(
                                 self.workgroup_size_x,
-                                op,
-                                &layouts[aliases[children[0].0].0],
-                                &layouts[aliases[children[1].0].0],
-                            ),
-                            Op::Elemwise(op) => kernel::unary_elemwise(
-                                self.workgroup_size_x,
-                                op,
-                                expr.layout.elements(),
-                            ),
-                            Op::Reduce { op, dims } => kernel::reduce(
-                                self.workgroup_size_x,
-                                op,
-                                &layouts[aliases[children[0].0].0],
                                 &expr.layout,
-                                &dims,
+                                children.iter().map(|id| (*id, &layouts[id.0])).collect(),
+                                WgpuExpr::new(
+                                    match op {
+                                        ElemwiseOp::Add => WgpuOp::Add,
+                                        ElemwiseOp::Mul => WgpuOp::Mul,
+                                        ElemwiseOp::Sin => WgpuOp::Sin,
+                                    },
+                                    children
+                                        .iter()
+                                        .map(|id| WgpuExpr::new_var(format!("elem_input_{}", id.0)))
+                                        .collect(),
+                                ),
                             ),
+                            Op::Reduce { .. } => todo!(),
                             Op::Movement(_) => {
                                 aliases.push(children[0]);
                                 layouts.push(expr.layout);
@@ -94,7 +96,9 @@ impl Compiler for WgpuCompiler {
                             1,
                             1,
                         ],
-                        inputs: children.iter().copied().chain(iter::once(id)).collect(),
+                        inputs: iter::once((id, false))
+                            .chain(children.iter().copied().map(|id| (id, true)))
+                            .collect(),
                     });
 
                     for &child in children.iter().filter(|child| last_usages[child.0] == id) {

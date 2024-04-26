@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, num::NonZeroU32};
 
 use pollster::FutureExt;
 use wgpu::{
@@ -30,7 +30,7 @@ pub(crate) enum ConcreteWgpuStep {
         size: u64,
         compute_pipeline: ComputePipeline,
         workgroups: [u32; 3],
-        inputs: Box<[ExprId]>,
+        inputs: Box<[(ExprId, bool)]>,
     },
 }
 
@@ -163,25 +163,25 @@ impl WgpuRunner {
             })
     }
 
-    fn create_bind_group(
-        &self,
-        compute_pipeline: &ComputePipeline,
-        buffers: &[&Buffer],
-    ) -> BindGroup {
+    fn create_bind_group(&self, buffers: &[(&Buffer, bool)]) -> BindGroup {
         let bind_group_layout = self
             .device
             .create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: None,
-                entries: buffers.iter().map()BindGroupLayoutEntry {
-                    binding: todo!(),
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: () },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: Some(),
-                }],
+                entries: &buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &(buffer, read_only))| BindGroupLayoutEntry {
+                        binding: index as u32,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: Some(NonZeroU32::new(buffer.size() as u32).unwrap()),
+                    })
+                    .collect::<Vec<_>>(),
             });
 
         self.device.create_bind_group(&BindGroupDescriptor {
@@ -190,7 +190,7 @@ impl WgpuRunner {
             entries: buffers
                 .iter()
                 .enumerate()
-                .map(|(index, buffer)| BindGroupEntry {
+                .map(|(index, (buffer, _))| BindGroupEntry {
                     binding: index as u32,
                     resource: buffer.as_entire_binding(),
                 })
@@ -225,13 +225,12 @@ impl WgpuRunner {
         &self,
         compute_pipeline: &ComputePipeline,
         workgroups: [u32; 3],
-        buffers: &[ExprId],
+        buffers: &[(ExprId, bool)],
     ) {
         let bind_group = self.create_bind_group(
-            compute_pipeline,
             &buffers
                 .iter()
-                .map(|id| &self.buffers[&id])
+                .map(|&(id, read_only)| (&self.buffers[&id], read_only))
                 .collect::<Vec<_>>(),
         );
 
@@ -280,7 +279,6 @@ impl Runner for WgpuRunner {
     }
 
     fn run(&mut self, plan: ConcreteWgpuPlan, inputs: Vec<Tensor>) -> Vec<Tensor> {
-        println!("{plan:#?}");
         for (index, input) in inputs.iter().enumerate() {
             self.allocate(plan.inputs[index], input);
         }

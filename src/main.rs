@@ -1,6 +1,7 @@
 use momentum::{
+    builder,
     compiler::{Compiler, Runner},
-    graph::{ElemwiseOp, Graph, Op},
+    graph::Graph,
     tensor::{Layout, Tensor},
     wgpu::{compiler::WgpuCompiler, runner::WgpuRunner},
 };
@@ -8,12 +9,11 @@ use momentum::{
 fn main() {
     let mut graph = Graph::new();
 
-    let a = graph.add_input(Layout::from([1]));
-    let b = graph.add_input(Layout::from([1]));
-    let c = graph.add_input(Layout::from([1]));
+    let a = graph.add_input(Layout::scalar());
+    let b = graph.add_input(Layout::scalar());
+    let c = graph.add_input(Layout::scalar());
 
-    let result = graph.add_op(Op::Elemwise(ElemwiseOp::Mul), &[a, b]);
-    let result = graph.add_op(Op::Elemwise(ElemwiseOp::Add), &[result, c]);
+    let result = builder::Add::new(builder::Mul::new(a, b).build(&mut graph), c).build(&mut graph);
 
     graph.add_output(result);
 
@@ -28,7 +28,11 @@ fn main() {
         "{:#?}",
         runner.run(
             runnable,
-            vec![Tensor::from_parts(Box::new([2.0]), Layout::from([1]))]
+            vec![
+                Tensor::from_scalar(2.0),
+                Tensor::from_scalar(2.0),
+                Tensor::from_scalar(2.0)
+            ]
         )
     );
 }

@@ -1,4 +1,4 @@
-{% import "common.wgsl.tera" as macros %}
+{% import "common" as macros %}
 
 var<workgroup> accumulators: array<f32, {{ workgroup_size_y }}>;
 
@@ -18,10 +18,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_
     let output_index = global_id.x;
     let batch_index = local_id.y;
 
-    if output_index < {{ 1_elements }} {
+    if output_index < {{ elements_1 }} {
         var remaining_index = output_index;
         
-        {% for stride in 1_strides %}
+        {% for stride in strides_1 %}
             {% if not loop.index0 in reduce_dims %}
                 let index_{{ loop.index0 }} = remaining_index / {{ stride }}u;
             {% endif %}
@@ -42,7 +42,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_
         {% endfor %}
 
         let index =
-            {% for stride in 0_strides %}
+            {% for stride in strides_0 %}
                 index_{{ loop.index0 }} * {{ stride }}u + {% if loop.last %} batch_index {% endif %}
             {% endfor %};
 
@@ -71,6 +71,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(workgroup_
         {% for dim in reduce_dims %}
             }
         {% endfor %}
+
+        workgroupBarrier();
+
+        let accumulator = accumulators[batch_index];
 
         {% for id in post_ids %}
             {{

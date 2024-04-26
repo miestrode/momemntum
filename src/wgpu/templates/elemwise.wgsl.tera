@@ -1,29 +1,29 @@
-{% import "common.wgsl.tera" as macros %}
+{% import "common" as macros %}
 
-@group(0) @binding(1)
+@group(0) @binding(0)
 var<storage, read_write> output: array<f32>;
 
-{% for id in ids %}
-    @group(0) @binding({{ id }})
-    var<storage> input_{{ id }}: array<f32>;
+{% for input in inputs %}
+    @group(0) @binding({{ loop.index }})
+    var<storage> {{ input }}: array<f32>;
 {% endfor %}
 
 @compute @workgroup_size({{ workgroup_size_x }})
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
-    if index < {{ 1_elements }}u {
-        {% for id in ids %}
+    if index < {{ layouts["output"]["elements"] }}u {
+        {% for input in inputs %}
             {{
                 macros::get_index(
                     old_index="index",
-                    old_strides="1_strides",
-                    new_strides=id ~ "_strides",
-                    new_index="elem_index_" ~ id
+                    old_strides=layouts["output"]["strides"],
+                    new_strides=layouts[input]["strides"],
+                    new_index="index_" ~ input
                 )
             }}
 
-            let elem_{{ id }} = input_{{ id }}[elem_index_{{ id }}];
+            let elem_{{ input }} = {{ input }}[index_{{ input }}];
         {% endfor %}
 
         output[index] = {{ expr }};

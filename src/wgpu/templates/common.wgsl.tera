@@ -1,5 +1,5 @@
 {% macro get_index(old_index, old_strides, new_strides, new_index) %}
-    let {{ new_index }};
+    var {{ new_index }}: u32;
 
     {
         var remaining_index = {{ old_index }};
