@@ -22,10 +22,10 @@ pub(crate) enum WgpuStep {
     Deallocate(ExprId),
     Execute {
         output: ExprId,
-        size: u64,
         source: String,
         workgroups: [u32; 3],
-        inputs: Box<[(ExprId, bool)]>,
+        inputs: Vec<ExprId>,
+        inputs_layout: Vec<(usize, bool)>,
     },
 }
 
@@ -65,7 +65,6 @@ impl Compiler for WgpuCompiler {
                 ExprBody::Op { op, children } => {
                     steps.push(WgpuStep::Execute {
                         output: id,
-                        size: expr.layout.size() as u64,
                         source: match op {
                             Op::Elemwise(op) => kernel::elemwise(
                                 self.workgroup_size_x,
@@ -96,8 +95,9 @@ impl Compiler for WgpuCompiler {
                             1,
                             1,
                         ],
-                        inputs: iter::once((id, false))
-                            .chain(children.iter().copied().map(|id| (id, true)))
+                        inputs: iter::once(id).chain(children.iter().copied()).collect(),
+                        inputs_layout: iter::once((expr.layout.size(), false))
+                            .chain(children.iter().map(|id| (layouts[id.0].size(), true)))
                             .collect(),
                     });
 

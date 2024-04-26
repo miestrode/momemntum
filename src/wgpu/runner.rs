@@ -1,13 +1,14 @@
-use std::{borrow::Cow, collections::HashMap, num::NonZeroU32};
+use std::{borrow::Cow, collections::HashMap, num::NonZeroU64};
 
 use pollster::FutureExt;
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
-    Adapter, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType, BufferDescriptor, BufferUsages,
-    CommandEncoder, ComputePipeline, ComputePipelineDescriptor, Device, Instance,
-    InstanceDescriptor, Maintain, MapMode, Queue, RequestAdapterOptions, ShaderModule,
-    ShaderModuleDescriptor, ShaderSource, ShaderStages, SubmissionIndex,
+    Adapter, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType, Buffer, BufferBindingType,
+    BufferDescriptor, BufferUsages, CommandEncoder, ComputePipeline, ComputePipelineDescriptor,
+    Device, Instance, InstanceDescriptor, Maintain, MapMode, PipelineLayoutDescriptor, Queue,
+    RequestAdapterOptions, ShaderModule, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    SubmissionIndex,
 };
 
 use crate::{
@@ -27,10 +28,11 @@ pub(crate) enum ConcreteWgpuStep {
     Deallocate(ExprId),
     Execute {
         output: ExprId,
-        size: u64,
+        output_size: u64,
         compute_pipeline: ComputePipeline,
+        bind_group_layout: BindGroupLayout,
         workgroups: [u32; 3],
-        inputs: Box<[(ExprId, bool)]>,
+        inputs: Vec<ExprId>,
     },
 }
 
@@ -153,44 +155,58 @@ impl WgpuRunner {
         );
     }
 
-    fn create_compute_pipeline(&self, module: &ShaderModule, entry_point: &str) -> ComputePipeline {
+    fn create_compute_pipeline(
+        &self,
+        module: &ShaderModule,
+        entry_point: &str,
+        bind_group_layout: &BindGroupLayout,
+    ) -> ComputePipeline {
         self.device
             .create_compute_pipeline(&ComputePipelineDescriptor {
                 label: None,
-                layout: None,
+                layout: Some(
+                    &self
+                        .device
+                        .create_pipeline_layout(&PipelineLayoutDescriptor {
+                            label: None,
+                            bind_group_layouts: &[bind_group_layout],
+                            push_constant_ranges: &[],
+                        }),
+                ),
                 module,
                 entry_point,
             })
     }
 
-    fn create_bind_group(&self, buffers: &[(&Buffer, bool)]) -> BindGroup {
-        let bind_group_layout = self
-            .device
+    fn create_bind_group_layout(&self, inputs_layout: &[(usize, bool)]) -> BindGroupLayout {
+        self.device
             .create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: None,
-                entries: &buffers
+                entries: &inputs_layout
                     .iter()
                     .enumerate()
-                    .map(|(index, &(buffer, read_only))| BindGroupLayoutEntry {
+                    .map(|(index, &(size, read_only))| BindGroupLayoutEntry {
                         binding: index as u32,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::Buffer {
                             ty: BufferBindingType::Storage { read_only },
                             has_dynamic_offset: false,
-                            min_binding_size: None,
+                            min_binding_size: Some(NonZeroU64::new(size as u64).unwrap()),
                         },
-                        count: Some(NonZeroU32::new(buffer.size() as u32).unwrap()),
+                        count: None,
                     })
                     .collect::<Vec<_>>(),
-            });
+            })
+    }
 
+    fn create_bind_group(&self, layout: &BindGroupLayout, buffers: &[&Buffer]) -> BindGroup {
         self.device.create_bind_group(&BindGroupDescriptor {
             label: None,
-            layout: &bind_group_layout,
+            layout,
             entries: buffers
                 .iter()
                 .enumerate()
-                .map(|(index, (buffer, _))| BindGroupEntry {
+                .map(|(index, buffer)| BindGroupEntry {
                     binding: index as u32,
                     resource: buffer.as_entire_binding(),
                 })
@@ -225,14 +241,15 @@ impl WgpuRunner {
         &self,
         compute_pipeline: &ComputePipeline,
         workgroups: [u32; 3],
-        buffers: &[(ExprId, bool)],
+        bind_group_layout: &BindGroupLayout,
+        buffers: &[ExprId],
     ) {
-        let bind_group = self.create_bind_group(
-            &buffers
-                .iter()
-                .map(|&(id, read_only)| (&self.buffers[&id], read_only))
-                .collect::<Vec<_>>(),
-        );
+        let buffers = buffers
+            .iter()
+            .map(|id| &self.buffers[&id])
+            .collect::<Vec<_>>();
+
+        let bind_group = self.create_bind_group(bind_group_layout, &buffers);
 
         let encoder = self.create_command_encoder();
 
@@ -256,17 +273,23 @@ impl Runner for WgpuRunner {
                     WgpuStep::Deallocate(id) => ConcreteWgpuStep::Deallocate(id),
                     WgpuStep::Execute {
                         output,
-                        size,
                         source,
                         workgroups,
                         inputs,
+                        inputs_layout,
                     } => {
                         let module = self.create_shader_module(&source);
+                        let bind_group_layout = self.create_bind_group_layout(&inputs_layout);
 
                         ConcreteWgpuStep::Execute {
                             output,
-                            size,
-                            compute_pipeline: self.create_compute_pipeline(&module, "main"),
+                            output_size: inputs_layout[0].0 as u64,
+                            compute_pipeline: self.create_compute_pipeline(
+                                &module,
+                                "main",
+                                &bind_group_layout,
+                            ),
+                            bind_group_layout,
                             workgroups,
                             inputs,
                         }
@@ -285,17 +308,28 @@ impl Runner for WgpuRunner {
 
         for step in plan.steps {
             match step {
-                ConcreteWgpuStep::Allocate { id, tensor } => self.allocate(id, &tensor),
-                ConcreteWgpuStep::Deallocate(id) => self.deallocate(id),
+                ConcreteWgpuStep::Allocate { id, tensor } => {
+                    self.allocate(id, &tensor);
+                }
+                ConcreteWgpuStep::Deallocate(id) => {
+                    self.deallocate(id);
+                }
                 ConcreteWgpuStep::Execute {
                     output,
-                    size,
+                    output_size,
                     compute_pipeline,
+                    bind_group_layout,
                     workgroups,
                     inputs,
                 } => {
-                    self.create_output_buffer(output, size);
-                    self.execute_pipeline(&compute_pipeline, workgroups, &inputs)
+                    self.create_output_buffer(output, output_size);
+
+                    self.execute_pipeline(
+                        &compute_pipeline,
+                        workgroups,
+                        &bind_group_layout,
+                        &inputs,
+                    );
                 }
             }
         }
